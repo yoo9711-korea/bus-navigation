@@ -6,7 +6,7 @@ export default async function handler(req, res) {
     process.env.GYEONGGI_BUS_API_KEY
 
   // ============================
-  // ❌ API KEY 없음
+  // API KEY 체크
   // ============================
   if (!key) {
     return res.status(500).json({
@@ -16,7 +16,7 @@ export default async function handler(req, res) {
   }
 
   // ============================
-  // 🔥 안전 JSON 파서
+  // 안전 JSON 파서
   // ============================
   async function safeJson(response) {
     const text = await response.text()
@@ -29,7 +29,116 @@ export default async function handler(req, res) {
   }
 
   // ============================
-  // 🚏 정류장 목록
+  // 노선 좌표 가져오기
+  // ============================
+  async function getRouteLine(routeId) {
+    const url =
+      `https://apis.data.go.kr/6410000/busrouteservice/v2/getBusRouteLineListv2` +
+      `?serviceKey=${key}&routeId=${routeId}&_type=json`
+
+    const resApi = await fetch(url)
+
+    const json =
+      await safeJson(resApi)
+
+    const items =
+      json?.response?.msgBody
+        ?.busRouteLineList ||
+      json?.response?.body
+        ?.items?.item ||
+      []
+
+    const list = Array.isArray(items)
+      ? items
+      : [items]
+
+    const result = list.map(
+      (p, i) => ({
+        seq: Number(
+          p.seq ||
+          p.nodeSeq ||
+          i
+        ),
+
+        lat: Number(
+          p.gpsY ||
+          p.y ||
+          0
+        ),
+
+        lng: Number(
+          p.gpsX ||
+          p.x ||
+          0
+        ),
+      })
+    )
+
+    // 정렬
+    result.sort(
+      (a, b) => a.seq - b.seq
+    )
+
+    // 중복 제거
+    const unique = []
+
+    const seen = new Set()
+
+    for (const p of result) {
+      const key =
+        `${p.lat}-${p.lng}`
+
+      if (
+        p.lat &&
+        p.lng &&
+        !seen.has(key)
+      ) {
+        seen.add(key)
+        unique.push(p)
+      }
+    }
+
+    return unique
+  }
+
+  // ============================
+  // 정류장 좌표 자동 보정
+  // ============================
+  function attachStopCoords(
+    stops,
+    routeLine
+  ) {
+    if (!routeLine.length) {
+      return stops
+    }
+
+    const total =
+      routeLine.length
+
+    return stops.map((s, i) => {
+      // routeLine 비율 기반
+      const idx = Math.floor(
+        (i / stops.length) * total
+      )
+
+      const point =
+        routeLine[
+          Math.min(
+            idx,
+            total - 1
+          )
+        ]
+
+      return {
+        ...s,
+        lat: point?.lat || 0,
+        lng: point?.lng || 0,
+      }
+    })
+  }
+
+  // ============================
+  // 정류장 목록
   // ============================
   async function getStops(routeId) {
     const url =
@@ -52,9 +161,6 @@ export default async function handler(req, res) {
       ? items
       : [items]
 
-    // ⚠️ 경기버스 일부 노선은
-    // 정류장 좌표를 제공하지 않음
-    // 그래서 name/order 위주 사용
     const result = list.map(
       (s, i) => ({
         order: Number(
@@ -66,7 +172,6 @@ export default async function handler(req, res) {
           s.bstopNm ||
           "알수없음",
 
-        // 좌표 없는 경우 0 유지
         lat: Number(
           s.gpsY ||
           s.y ||
@@ -91,80 +196,7 @@ export default async function handler(req, res) {
   }
 
   // ============================
-  // 🛣 노선 좌표
-  // ============================
-  async function getRouteLine(routeId) {
-    const url =
-      `https://apis.data.go.kr/6410000/busrouteservice/v2/getBusRouteLineListv2` +
-      `?serviceKey=${key}&routeId=${routeId}&_type=json`
-
-    const resApi = await fetch(url)
-
-    const json =
-      await safeJson(resApi)
-
-    const items =
-      json?.response?.msgBody
-        ?.busRouteLineList ||
-      json?.response?.body
-        ?.items?.item ||
-      []
-
-    const list = Array.isArray(items)
-      ? items
-      : [items]
-
-    // 🔥 seq 없는 경우
-    // index(i)로 자동 보정
-    const result = list.map(
-      (p, i) => ({
-        seq: Number(
-          p.seq ||
-          p.nodeSeq ||
-          i
-        ),
-
-        lat: Number(
-          p.gpsY ||
-          p.y ||
-          0
-        ),
-
-        lng: Number(
-          p.gpsX ||
-          p.x ||
-          0
-        ),
-      })
-    )
-
-    // 순서 정렬
-    result.sort(
-      (a, b) => a.seq - b.seq
-    )
-
-    // ============================
-    // 🔥 중복 좌표 제거
-    // ============================
-    const unique = []
-
-    const seen = new Set()
-
-    for (const p of result) {
-      const key =
-        `${p.lat}-${p.lng}`
-
-      if (!seen.has(key)) {
-        seen.add(key)
-        unique.push(p)
-      }
-    }
-
-    return unique
-  }
-
-  // ============================
-  // 🚍 노선 검색
+  // 노선 검색
   // ============================
   async function searchRouteList(
     routeNo
@@ -205,7 +237,7 @@ export default async function handler(req, res) {
 
   try {
     // ============================
-    // 🔍 노선 검색
+    // 노선 검색
     // ============================
     if (!routeId) {
       const routes =
@@ -221,13 +253,19 @@ export default async function handler(req, res) {
     }
 
     // ============================
-    // 🛣 상세 데이터
+    // 상세 데이터
     // ============================
-    const stops =
+    let stops =
       await getStops(routeId)
 
     const routeLine =
       await getRouteLine(routeId)
+
+    // 🔥 stops 좌표 자동 보정
+    stops = attachStopCoords(
+      stops,
+      routeLine
+    )
 
     return res.status(200).json({
       ok: true,
