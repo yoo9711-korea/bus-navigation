@@ -35,12 +35,11 @@ export default async function handler(req, res) {
 
     const list = Array.isArray(items) ? items : [items]
 
-    const result = list.map((s, i) => ({
-      order: Number(s.stationSeq || i + 1),
-      name: s.stationName || s.bstopNm || "알수없음",
-      lat: Number(s.gpsY || 0),
-      lng: Number(s.gpsX || 0),
-    }))
+   const result = list.map((p) => ({
+  seq: Number(p.seq || p.nodeSeq || 0),
+  lat: Number(p.gpsY || p.y || 0),
+  lng: Number(p.gpsX || p.x || 0),
+}))
 
     result.sort((a, b) => a.order - b.order)
     return result
