@@ -1,0 +1,63 @@
+async function getRouteLine(routeId: string, key: string) {
+  const url =
+    `https://apis.data.go.kr/6410000/busrouteservice/v2/getBusRouteLineListv2` +
+    `?serviceKey=${key}&routeId=${routeId}&_type=json`
+
+  const res = await fetch(url)
+  const json = await safeJson(res)
+
+  const items =
+    json?.response?.msgBody?.busRouteLineList ||
+    json?.response?.body?.items?.item ||
+    []
+
+  const list = Array.isArray(items) ? items : [items]
+
+  // 1️⃣ seq 기반 생성
+  const result = list.map((p: any) => ({
+    seq: Number(p.seq || p.nodeSeq || 0),
+    lat: Number(p.gpsY || p.y || 0),
+    lng: Number(p.gpsX || p.x || 0),
+  }))
+
+  // 2️⃣ 정렬
+  result.sort((a, b) => a.seq - b.seq)
+
+  // 3️⃣ 반으로 나누기 (왕복)
+  const mid = Math.floor(result.length / 2)
+
+  const forward = result.slice(0, mid)
+  const backward = result.slice(mid)
+
+  // 🔥 4️⃣ 역방향 뒤집기
+  backward.reverse()
+
+  // 🔥 5️⃣ 두 라인 평균내기 (핵심)
+  const merged: any[] = []
+
+  const len = Math.min(forward.length, backward.length)
+
+  for (let i = 0; i < len; i++) {
+    const f = forward[i]
+    const b = backward[i]
+
+    merged.push({
+      lat: (f.lat + b.lat) / 2,
+      lng: (f.lng + b.lng) / 2,
+    })
+  }
+
+  // 6️⃣ 중복 제거
+  const unique: any[] = []
+  const seen = new Set()
+
+  for (const p of merged) {
+    const key = `${p.lat}-${p.lng}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      unique.push(p)
+    }
+  }
+
+  return unique
+}
